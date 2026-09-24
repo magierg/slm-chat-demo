@@ -72,6 +72,7 @@ press Enter, get a reply. `/exit` quits.
 | `--mcp` | let the model call the tools served by the MCP server (`get_weather`, `get_forecast`, `calculate`, `get_current_time`) |
 | `--show-tools` | print tool calls and results (hidden by default) |
 | `--show-thinking` | print the model's reasoning trace before the answer |
+| `--model NAME` | override the model for this session (e.g. switch back to `lfm2.5-2.6b-4bit`) |
 | `--think-budget N` | cap the model's thinking tokens (overrides `SLM_REASONING_MAX_TOKENS`) |
 | `--memory` | inject facts remembered from earlier sessions |
 | `--all` | shorthand for `--mcp --memory`, plus `notes.example.txt` if present |
@@ -103,7 +104,9 @@ personas. `/reset` clears history for a clean switch. Check it with
 
 The `--show-thinking` and `--show-tools` flags just start with those displays on;
 `/think` and `/tools` toggle them live, so you can reveal reasoning or tool calls
-mid-conversation.
+mid-conversation. `/think` controls both **generation** (send `enable_thinking`) and
+**display** - on Ling, `/think off` truly stops it reasoning; on LFM (which always
+thinks) it only hides the trace.
 
 ### system vs context vs memory
 
@@ -167,9 +170,36 @@ Read from `.env` if present, then real environment variables.
 | `SLM_TEMPERATURE` | `0.7` | Default sampling temperature |
 | `SLM_MAX_TOKENS` | `4096` | Max **generated** tokens per reply (thinking + answer) |
 | `SLM_REASONING_MAX_TOKENS` | *(unset)* | Optional cap on the thinking portion only (rapid-mlx) |
+| `SLM_ENABLE_THINKING` | `true` | Send `enable_thinking` so the model thinks (needed by Ling; LFM ignores it). Empty = omit the field |
 
 Smaller models are faster; bigger models follow instructions and call tools more
 reliably. `chat.py` works with any of them.
+
+### Models (reasoning)
+
+**Recommended: `ling-3.0-tiny-4bit`.** Measured on an M4 MacBook Air 16 GB it is
+both **faster** (~90–105 tok/s decode) and **stronger at chain-of-thought** than
+LFM, and its thinking can actually be switched off for snappy answers
+(see [BENCHMARK.md](BENCHMARK.md)). Use LFM as a lower-memory fallback.
+
+| Model | Reasoning | Notes |
+|-------|-----------|-------|
+| `ling-3.0-tiny-4bit` | **off by default**; on with `SLM_ENABLE_THINKING=true` | 7.9B MoE / 1.3B active - stronger CoT, faster, real `/think` toggle, ~4.2 GB **recommended** |
+| `lfm2.5-2.6b-4bit` | always reasons (flag only relabels) | dense, smaller (~2.5 GB), slower here (~58 tok/s) |
+
+Switch models any of three ways (no code change):
+
+```bash
+python chat.py --model ling-3.0-tiny-4bit --all     # per session
+SLM_MODEL=ling-3.0-tiny-4bit ./run.sh --all         # per command (env wins over .env)
+# or edit SLM_MODEL in .env
+```
+
+The rapid-mlx aliases pull with `rapid-mlx pull <alias>` and serve with
+`rapid-mlx serve <alias>`.
+
+Measured latency and throughput for both models on an M4 MacBook Air 16 GB are in
+**[BENCHMARK.md](BENCHMARK.md)** (`benchmark.py` is the harness).
 
 ## The HTTP request & response
 
@@ -195,6 +225,7 @@ Content-Type: application/json
   "temperature": 0.7,
   "max_tokens": 4096,
   "reasoning_max_tokens": 512,
+  "enable_thinking": true,
   "stream": false,
   "tools": [ /* only with --mcp: the tool schemas discovered over MCP */ ],
   "tool_choice": "auto"
@@ -208,6 +239,7 @@ Content-Type: application/json
 | `temperature` | `SLM_TEMPERATURE` / `--temperature` | Randomness (0 = deterministic) |
 | `max_tokens` | `SLM_MAX_TOKENS` | Cap on **generated** tokens (see below) |
 | `reasoning_max_tokens` | `SLM_REASONING_MAX_TOKENS` / `--think-budget` | Optional cap on the **thinking** part only (omitted if unset) |
+| `enable_thinking` | `SLM_ENABLE_THINKING` / `/think` | Ask the model to think (Ling needs it; LFM ignores it) |
 | `stream` | fixed `false` | We wait for the whole reply; no SSE streaming |
 | `tools` | MCP `tools/list` | Functions the model may call |
 | `tool_choice` | fixed `auto` | The model decides whether to call a tool |
@@ -382,16 +414,19 @@ Two honesty notes:
   4. **memory** - load/save facts in `data/memory.json`
   5. **tools** - tool schemas, `execute_tool()`, `run_tool_loop()`
 - `mcp_server.py` / `mcp_client.py` - the MCP server and the client bridge.
+- `benchmark.py` / `BENCHMARK.md` - the measurement harness and its results.
 - `notes.example.txt` - a sample context file. Copy it to `notes.txt` (git-ignored)
   and edit with your own details; use it with `--context` / `--all`.
 
 ## Notes on the design
 
-- **Reasoning models** (like LFM2.5) think before answering. The server returns
-  that trace separately as `reasoning_content`, and `--show-thinking` prints it
-  dimmed above the answer. Thinking counts against `SLM_MAX_TOKENS` (default 4096),
-  so keep it generous or answers get truncated; cap just the thinking with
-  `--think-budget N` / `SLM_REASONING_MAX_TOKENS`.
+- **Reasoning models** think before answering. The server returns that trace
+  separately as `reasoning_content`, and `--show-thinking` prints it dimmed above
+  the answer. Ask for thinking with `enable_thinking` (`SLM_ENABLE_THINKING`):
+  **Ling defaults it off**, LFM ignores it (always thinks). Thinking counts against
+  `SLM_MAX_TOKENS` (default 4096), so keep it generous or answers get truncated;
+  cap just the thinking with `--think-budget N` / `SLM_REASONING_MAX_TOKENS`.
+  `/think on|off` toggles both generation and display live.
 - **Tool calling uses the native `tools` API and real weather data** from
   [Open-Meteo](https://open-meteo.com) (no API key, needs internet). Tools:
   `get_weather`, `get_forecast`, `calculate`, `get_current_time`. Tool calls are

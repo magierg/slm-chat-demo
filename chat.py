@@ -15,6 +15,7 @@
     python chat.py --mcp
     python chat.py --mcp --show-tools
     python chat.py --show-thinking
+    python chat.py --model lfm2.5-2.6b-4bit
     python chat.py --temperature 0.9
 
 Commands while chatting: /history  /clear  /reset  /status  /think [on|off]  /tools [on|off]  /system <text|clear>  /context <file|clear>  /remember <fact>  /memory  /forget  /exit
@@ -25,6 +26,7 @@ import difflib
 import re
 from pathlib import Path
 
+import slm
 from slm import (
     add_memory,
     chat,
@@ -42,6 +44,7 @@ parser = argparse.ArgumentParser(description="Chat with a local model.")
 parser.add_argument("--raw", action="store_true", help="send each message alone (no history)")
 parser.add_argument("--system", default="", help="system prompt")
 parser.add_argument("--context", default="", help="file whose contents are injected into the system prompt")
+parser.add_argument("--model", default="", help="override the model for this session (e.g. lfm2.5-2.6b-4bit)")
 parser.add_argument("--mcp", action="store_true", help="let the model call tools served by the MCP server")
 parser.add_argument("--show-tools", action="store_true", help="print tool calls and results")
 parser.add_argument("--show-thinking", action="store_true", help="print the model's reasoning before the answer")
@@ -52,6 +55,9 @@ parser.add_argument("--plain", action="store_true", help="print the model's raw 
 parser.add_argument("--temperature", type=float, default=None)
 parser.add_argument("--show-payload", action="store_true", help="print the messages[] sent each turn")
 args = parser.parse_args()
+
+if args.model:
+    slm.MODEL = args.model
 
 if args.all:
     args.mcp = args.memory = True
@@ -70,6 +76,7 @@ system_prompt = args.system
 # Display toggles, changeable at runtime with /think and /show-tools.
 show_thinking = args.show_thinking
 show_tools = args.show_tools
+enable_thinking = slm.ENABLE_THINKING  # whether to ask the model to think (Ling) or not
 
 # Tools are served by the MCP server rather than hardcoded in the client.
 mcp_client = None
@@ -150,7 +157,7 @@ def main() -> None:
 
 
 def repl() -> None:
-    global system_prompt, context_text, context_source, show_thinking, show_tools
+    global system_prompt, context_text, context_source, show_thinking, show_tools, enable_thinking
     while True:
         try:
             line = input("\nyou> ").strip()
@@ -189,8 +196,10 @@ def repl() -> None:
             continue
         if line in ("/think", "/thinking") or line.startswith(("/think ", "/thinking ")):
             argument = line.split(" ", 1)[1].strip().lower() if " " in line else ""
-            show_thinking = argument == "on" if argument in ("on", "off") else not show_thinking
-            print(f"(reasoning display {'on' if show_thinking else 'off'})")
+            on = argument == "on" if argument in ("on", "off") else not enable_thinking
+            enable_thinking = on   # ask the model to think (real toggle on Ling)
+            show_thinking = on     # and show the trace
+            print(f"(thinking {'on' if on else 'off'})")
             continue
         if line in ("/tools", "/show-tools") or line.startswith(("/tools ", "/show-tools ")):
             argument = line.split(" ", 1)[1].strip().lower() if " " in line else ""
@@ -207,7 +216,9 @@ def repl() -> None:
                 print("(context: none)")
             facts = load_memory()
             print(f"(memory: {len(facts)} facts)")
-            print(f"(reasoning display: {'on' if show_thinking else 'off'}, "
+            print(f"(model: {slm.MODEL})")
+            print(f"(thinking: {'on' if enable_thinking else 'off'}, "
+                  f"thinking display: {'on' if show_thinking else 'off'}, "
                   f"tool display: {'on' if show_tools else 'off'})")
             continue
         if line == "/context" or line.startswith(("/context ", "/context:")):
@@ -261,7 +272,8 @@ def repl() -> None:
             if args.mcp:
                 base = list(messages)
                 reply = run_tool_loop(messages, verbose=verbose_tools, show_thinking=show_thinking,
-                                      reasoning_max_tokens=args.think_budget, **tool_kwargs)["content"]
+                                      reasoning_max_tokens=args.think_budget,
+                                      enable_thinking=enable_thinking, **tool_kwargs)["content"]
 
                 # Small models sometimes skip the tool, or call the wrong one. If
                 # the question clearly needs a specific tool and it wasn't called,
@@ -287,12 +299,14 @@ def repl() -> None:
                     else:
                         messages.insert(0, {"role": "system", "content": nudge})
                     reply = run_tool_loop(messages, verbose=verbose_tools, show_thinking=show_thinking,
-                                          reasoning_max_tokens=args.think_budget, **tool_kwargs)["content"]
+                                          reasoning_max_tokens=args.think_budget,
+                                          enable_thinking=enable_thinking, **tool_kwargs)["content"]
                 elif verbose_tools and not called:
                     print(dim("(no tool was called - the model answered from its own knowledge)"))
             else:
                 response = chat(messages, temperature=args.temperature,
-                                reasoning_max_tokens=args.think_budget)
+                                reasoning_max_tokens=args.think_budget,
+                                enable_thinking=enable_thinking)
                 reply = response["content"]
                 if show_thinking:
                     print_thinking(response.get("reasoning", ""))

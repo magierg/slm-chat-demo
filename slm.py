@@ -64,6 +64,12 @@ MAX_TOKENS = int(os.environ.get("SLM_MAX_TOKENS", "4096"))
 _reasoning_cap = os.environ.get("SLM_REASONING_MAX_TOKENS", "").strip()
 REASONING_MAX_TOKENS = int(_reasoning_cap) if _reasoning_cap else None
 
+# Whether to ask the model to think before answering (rapid-mlx `enable_thinking`).
+# Ling defaults reasoning OFF, so it needs this; LFM ignores it (always thinks).
+# Set SLM_ENABLE_THINKING= (empty) to omit the field on servers that reject it.
+_thinking = os.environ.get("SLM_ENABLE_THINKING", "true").strip().lower()
+ENABLE_THINKING = None if _thinking == "" else _thinking not in ("0", "false", "no", "off")
+
 
 # =============================================================================
 # 2. CHAT - the core function
@@ -81,17 +87,19 @@ def _split_thinking(content: str) -> tuple[str, str]:
 
 
 def chat(messages: list[dict], temperature: float | None = None, tools: list[dict] | None = None,
-         tool_choice=None, reasoning_max_tokens: int | None = None) -> dict:
+         tool_choice=None, reasoning_max_tokens: int | None = None,
+         enable_thinking: bool | None = None) -> dict:
     """Send a list of messages to the model and return {'content', 'reasoning', 'tool_calls'}.
 
     This is where the whole "stateless" idea becomes concrete: the *only* thing
     the model knows is what is inside `messages`. There is no session, no
     server-side memory. Send a different list, get a different answer.
 
-    Reasoning models (like LFM2.5) think before answering; the server puts that
-    trace in `reasoning_content`, kept separate from the final answer.
-    `reasoning_max_tokens` optionally caps only the thinking portion (if the
-    server supports it, e.g. rapid-mlx); `SLM_REASONING_MAX_TOKENS` sets the default.
+    Reasoning models think before answering; the server puts that trace in
+    `reasoning_content`, separate from the final answer. `enable_thinking` asks the
+    model to think (Ling defaults off; LFM ignores it); `reasoning_max_tokens`
+    optionally caps only the thinking portion. Both fall back to the
+    `SLM_ENABLE_THINKING` / `SLM_REASONING_MAX_TOKENS` config.
     """
     body = {
         "model": MODEL,
@@ -106,6 +114,9 @@ def chat(messages: list[dict], temperature: float | None = None, tools: list[dic
     cap = REASONING_MAX_TOKENS if reasoning_max_tokens is None else reasoning_max_tokens
     if cap is not None:
         body["reasoning_max_tokens"] = cap
+    think = ENABLE_THINKING if enable_thinking is None else enable_thinking
+    if think is not None:
+        body["enable_thinking"] = think
 
     try:
         response = requests.post(
@@ -441,7 +452,8 @@ def execute_tool(name: str, arguments: dict) -> str:
 
 def run_tool_loop(messages: list[dict], max_steps: int = 6, verbose: bool = True,
                   tools: list[dict] | None = None, executor=None, show_thinking: bool = False,
-                  reasoning_max_tokens: int | None = None) -> dict:
+                  reasoning_max_tokens: int | None = None,
+                  enable_thinking: bool | None = None) -> dict:
     """Ask the model; if it requests tools, run them and feed the results back.
 
     Keeps going until the model answers without requesting a tool. `messages` is
@@ -456,13 +468,27 @@ def run_tool_loop(messages: list[dict], max_steps: int = 6, verbose: bool = True
 
     result = {"content": "", "reasoning": "", "tool_calls": []}
     used_tools = False
+    last_tool_output = ""
     for _ in range(max_steps):
-        result = chat(messages, temperature=0, tools=tool_list, reasoning_max_tokens=reasoning_max_tokens)
+        result = chat(messages, temperature=0, tools=tool_list,
+                      reasoning_max_tokens=reasoning_max_tokens, enable_thinking=enable_thinking)
         if not result["tool_calls"]:
-            # Once tools have run, ask for the final answer WITHOUT tools. Keeping
-            # tools offered here makes small models dump facts and drop persona/style.
             if used_tools:
-                final = chat(messages, temperature=0, reasoning_max_tokens=reasoning_max_tokens)
+                # Prefer a personality-preserving synthesis WITHOUT tools offered,
+                # but never return an empty answer: fall back to the with-tools
+                # reply, then to a nudge, then to the raw tool output.
+                final = chat(messages, temperature=0, reasoning_max_tokens=reasoning_max_tokens,
+                             enable_thinking=enable_thinking)
+                if not final["content"].strip():
+                    final = result
+                if not final["content"].strip():
+                    nudge = messages + [{"role": "user",
+                                         "content": "Now answer the user's question using the tool result above."}]
+                    final = chat(nudge, temperature=0, reasoning_max_tokens=reasoning_max_tokens,
+                                 enable_thinking=enable_thinking)
+                if not final["content"].strip():
+                    final = {"content": last_tool_output or "(no answer)",
+                             "reasoning": "", "tool_calls": []}
                 if show_thinking:
                     print_thinking(final.get("reasoning", ""))
                 return final
@@ -481,6 +507,7 @@ def run_tool_loop(messages: list[dict], max_steps: int = 6, verbose: bool = True
             except json.JSONDecodeError:
                 arguments = {}
             output = run_tool(function["name"], arguments)
+            last_tool_output = output
             if verbose:
                 tool_call(function["name"], arguments, output)
             messages.append({
