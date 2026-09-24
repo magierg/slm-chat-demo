@@ -1,0 +1,86 @@
+NOTES - sample context file for `python chat.py --context notes.txt`
+
+Copy this to `notes.txt` and edit it with your own details. The model has no way
+to know any of it unless you supply it - that is the point of `--context`.
+
+=== About me ===
+
+Name: Alex
+Role: Test automation lead
+Location: Wellington, New Zealand
+Time zone: Pacific/Auckland (UTC+12)
+Style: concise answers, no emojis
+
+=== Agenda - Today (Wednesday) ===
+
+09:00  Team standup (15 min)
+09:30  Review the ADEPT Playwright suite - fix the flaky login test
+11:00  Azure DevOps pipeline performance review with Priya
+13:00  Lunch
+14:00  Spike: AI-assisted test case generation
+15:30  Bug triage - review open S1 and S2 defects
+16:30  Prepare notes for the release check
+
+=== ADEPT Test Automation ===
+
+Project: ADEPT
+
+Primary automation tools:
+- Playwright
+- .NET
+- TypeScript
+
+Performance testing:
+- Apache JMeter
+
+CI/CD:
+- Azure DevOps Pipelines
+- Self-hosted build agents
+
+Source control:
+- Git
+- Azure Repos
+
+Common test environments:
+- SIT
+- UAT
+- PRE
+
+=== Test Automation Standards ===
+
+Preferred browser automation framework:
+- Playwright
+
+Test design principles:
+- Maintainable locators
+- Reusable components
+- Environment-specific test data
+- Minimal use of fixed waits
+
+Accessibility testing:
+- Accessibility snapshots
+- Role-based and label-based locators preferred
+
+=== Team ===
+
+Release manager: Priya
+Product owner: Tomas
+On-call this week: Dana
+
+=== AI Usage ===
+
+Common AI-assisted activities:
+- Test case generation
+- Automation code generation
+- Pipeline authoring
+- Work item summarisation
+- Documentation assistance
+
+=== Team Focus Areas ===
+
+Current priorities:
+- Improving automation reliability
+- Reducing flaky tests
+- Faster pipeline execution
+- Better test data management
+- AI-assisted testing workflows
