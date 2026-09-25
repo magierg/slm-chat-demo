@@ -40,6 +40,59 @@ from slm import (
 )
 from mcp_client import MCPClient
 
+try:
+    import readline  # enables arrow-key history + line editing for input()
+except ImportError:  # e.g. Windows without pyreadline
+    readline = None
+
+HISTORY_FILE = Path.home() / ".slm_chat_history"
+HISTORY_SIZE = 500
+COMMANDS = [
+    "/history", "/clear", "/reset", "/status", "/think", "/tools",
+    "/system", "/context", "/remember", "/memory", "/forget", "/exit",
+]
+
+
+def setup_readline() -> None:
+    """Enable persistent history (up arrow, across sessions) and /command completion."""
+    if readline is None:
+        return
+    try:
+        readline.read_history_file(str(HISTORY_FILE))
+    except (FileNotFoundError, OSError):
+        pass
+    readline.set_history_length(HISTORY_SIZE)
+
+    def completer(text: str, state: int):
+        options = [name for name in COMMANDS if name.startswith(text)]
+        return options[state] if state < len(options) else None
+
+    readline.set_completer(completer)
+    libedit = "libedit" in (readline.__doc__ or "") or "EditLine" in getattr(readline, "_READLINE_LIBRARY_VERSION", "")
+    try:
+        readline.parse_and_bind("bind ^I rl_complete" if libedit else "tab: complete")
+    except Exception:
+        pass
+
+
+def save_readline_history() -> None:
+    """Persist history, de-duplicated and capped, with owner-only permissions."""
+    if readline is None:
+        return
+    try:
+        items = [readline.get_history_item(i) for i in range(1, readline.get_current_history_length() + 1)]
+        clean = list(dict.fromkeys(item for item in items if item))
+        readline.clear_history()
+        for item in clean[-HISTORY_SIZE:]:
+            readline.add_history(item)
+    except Exception:
+        pass
+    try:
+        readline.write_history_file(str(HISTORY_FILE))
+        HISTORY_FILE.chmod(0o600)
+    except OSError:
+        pass
+
 parser = argparse.ArgumentParser(description="Chat with a local model.")
 parser.add_argument("--raw", action="store_true", help="send each message alone (no history)")
 parser.add_argument("--system", default="", help="system prompt")
@@ -149,18 +202,23 @@ def day_hint(text: str) -> str | None:
 
 
 def main() -> None:
+    setup_readline()
     try:
         repl()
     finally:
         if mcp_client is not None:
             mcp_client.close()
+        save_readline_history()
 
 
 def repl() -> None:
     global system_prompt, context_text, context_source, show_thinking, show_tools, enable_thinking
     while True:
+        # Print the blank line BEFORE readline starts: a newline inside the prompt
+        # string breaks readline's cursor tracking (History would append, not replace).
+        print()
         try:
-            line = input("\nyou> ").strip()
+            line = input("you> ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
